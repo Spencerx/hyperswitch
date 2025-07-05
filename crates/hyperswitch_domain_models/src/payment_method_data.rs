@@ -24,7 +24,7 @@ use time::Date;
 
 // We need to derive Serialize and Deserialize because some parts of payment method data are being
 // stored in the database as serde_json::Value
-#[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Clone, Debug, Serialize, Deserialize)]
 pub enum PaymentMethodData {
     Card(Card),
     CardDetailsForNetworkTransactionId(CardDetailsForNetworkTransactionId),
@@ -88,9 +88,21 @@ impl PaymentMethodData {
             None
         }
     }
+
+    pub fn extract_debit_routing_saving_percentage(
+        &self,
+        network: &common_enums::CardNetwork,
+    ) -> Option<f64> {
+        self.get_co_badged_card_data()?
+            .co_badged_card_networks_info
+            .0
+            .iter()
+            .find(|info| &info.network == network)
+            .map(|info| info.saving_percentage)
+    }
 }
 
-#[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(PartialEq, Clone, Debug, Serialize, Deserialize, Default)]
 pub struct Card {
     pub card_number: cards::CardNumber,
     pub card_exp_month: Secret<String>,
@@ -120,7 +132,7 @@ pub struct CardDetailsForNetworkTransactionId {
     pub card_holder_name: Option<Secret<String>>,
 }
 
-#[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(PartialEq, Clone, Debug, Serialize, Deserialize, Default)]
 pub struct CardDetail {
     pub card_number: cards::CardNumber,
     pub card_exp_month: Secret<String>,
@@ -640,6 +652,8 @@ pub enum BankTransferData {
         bank_code: Option<String>,
     },
     InstantBankTransfer {},
+    InstantBankTransferFinland {},
+    InstantBankTransferPoland {},
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -650,10 +664,7 @@ pub struct SepaAndBacsBillingDetails {
     pub name: Secret<String>,
 }
 
-#[cfg(all(
-    any(feature = "v1", feature = "v2"),
-    not(feature = "payment_methods_v2")
-))]
+#[cfg(feature = "v1")]
 #[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, Default)]
 pub struct NetworkTokenData {
     pub token_number: cards::CardNumber,
@@ -669,7 +680,7 @@ pub struct NetworkTokenData {
     pub eci: Option<String>,
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 #[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, Default)]
 pub struct NetworkTokenData {
     pub network_token: cards::NetworkToken,
@@ -686,7 +697,7 @@ pub struct NetworkTokenData {
     pub eci: Option<String>,
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 #[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize, Default)]
 pub struct NetworkTokenDetails {
     pub network_token: cards::NetworkToken,
@@ -711,7 +722,7 @@ pub enum MobilePaymentData {
     },
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 impl TryFrom<payment_methods::PaymentMethodCreateData> for PaymentMethodData {
     type Error = error_stack::Report<common_utils::errors::ValidationError>;
 
@@ -839,6 +850,56 @@ impl
             nick_name,
             card_holder_name,
             co_badged_card_data: co_badged_card_data_optional,
+        }
+    }
+}
+
+#[cfg(feature = "v2")]
+impl
+    From<(
+        payment_methods::CardDetail,
+        Secret<String>,
+        Option<Secret<String>>,
+    )> for Card
+{
+    fn from(
+        (card_detail, card_cvc, card_holder_name): (
+            payment_methods::CardDetail,
+            Secret<String>,
+            Option<Secret<String>>,
+        ),
+    ) -> Self {
+        Self {
+            card_number: card_detail.card_number,
+            card_exp_month: card_detail.card_exp_month,
+            card_exp_year: card_detail.card_exp_year,
+            card_cvc,
+            card_issuer: card_detail.card_issuer,
+            card_network: card_detail.card_network,
+            card_type: card_detail.card_type.map(|val| val.to_string()),
+            card_issuing_country: card_detail.card_issuing_country.map(|val| val.to_string()),
+            bank_code: None,
+            nick_name: card_detail.nick_name,
+            card_holder_name: card_holder_name.or(card_detail.card_holder_name),
+            co_badged_card_data: None,
+        }
+    }
+}
+
+#[cfg(feature = "v2")]
+impl From<Card> for payment_methods::CardDetail {
+    fn from(card: Card) -> Self {
+        Self {
+            card_number: card.card_number,
+            card_exp_month: card.card_exp_month,
+            card_exp_year: card.card_exp_year,
+            card_holder_name: card.card_holder_name,
+            nick_name: card.nick_name,
+            card_issuing_country: None,
+            card_network: card.card_network,
+            card_issuer: card.card_issuer,
+            card_type: None,
+            card_cvc: Some(card.card_cvc),
         }
     }
 }
@@ -1505,6 +1566,12 @@ impl From<api_models::payments::BankTransferData> for BankTransferData {
             api_models::payments::BankTransferData::InstantBankTransfer {} => {
                 Self::InstantBankTransfer {}
             }
+            api_models::payments::BankTransferData::InstantBankTransferFinland {} => {
+                Self::InstantBankTransferFinland {}
+            }
+            api_models::payments::BankTransferData::InstantBankTransferPoland {} => {
+                Self::InstantBankTransferPoland {}
+            }
         }
     }
 }
@@ -1545,6 +1612,8 @@ impl From<BankTransferData> for api_models::payments::additional_info::BankTrans
                 },
             )),
             BankTransferData::InstantBankTransfer {} => Self::InstantBankTransfer {},
+            BankTransferData::InstantBankTransferFinland {} => Self::InstantBankTransferFinland {},
+            BankTransferData::InstantBankTransferPoland {} => Self::InstantBankTransferPoland {},
         }
     }
 }
@@ -1797,6 +1866,12 @@ impl GetPaymentMethodType for BankTransferData {
             Self::Pse {} => api_enums::PaymentMethodType::Pse,
             Self::LocalBankTransfer { .. } => api_enums::PaymentMethodType::LocalBankTransfer,
             Self::InstantBankTransfer {} => api_enums::PaymentMethodType::InstantBankTransfer,
+            Self::InstantBankTransferFinland {} => {
+                api_enums::PaymentMethodType::InstantBankTransferFinland
+            }
+            Self::InstantBankTransferPoland {} => {
+                api_enums::PaymentMethodType::InstantBankTransferPoland
+            }
         }
     }
 }
@@ -1898,7 +1973,7 @@ impl From<GooglePayWalletData> for payment_methods::PaymentMethodDataWalletInfo 
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum PaymentMethodsData {
     Card(CardDetailsPaymentMethod),
     BankDetails(payment_methods::PaymentMethodDataBankCreds), //PaymentMethodDataBankCreds and its transformations should be moved to the domain models
@@ -1915,7 +1990,7 @@ impl PaymentMethodsData {
             None
         }
     }
-    #[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+    #[cfg(feature = "v2")]
     pub fn get_co_badged_card_data(&self) -> Option<payment_methods::CoBadgedCardData> {
         todo!()
     }
@@ -1941,11 +2016,8 @@ fn saved_in_locker_default() -> bool {
     true
 }
 
-#[cfg(all(
-    any(feature = "v1", feature = "v2"),
-    not(feature = "payment_methods_v2")
-))]
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[cfg(feature = "v1")]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CardDetailsPaymentMethod {
     pub last4_digits: Option<String>,
     pub issuer_country: Option<String>,
@@ -1962,7 +2034,7 @@ pub struct CardDetailsPaymentMethod {
     pub co_badged_card_data: Option<payment_methods::CoBadgedCardData>,
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct CardDetailsPaymentMethod {
     pub last4_digits: Option<String>,
@@ -1979,7 +2051,7 @@ pub struct CardDetailsPaymentMethod {
     pub saved_to_locker: bool,
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 impl CardDetailsPaymentMethod {
     pub fn to_card_details_from_locker(self) -> payment_methods::CardDetailFromLocker {
         payment_methods::CardDetailFromLocker {
@@ -2029,7 +2101,7 @@ impl From<payment_methods::CardDetail> for CardDetailsPaymentMethod {
     }
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 impl From<payment_methods::CardDetail> for CardDetailsPaymentMethod {
     fn from(item: payment_methods::CardDetail) -> Self {
         Self {
@@ -2048,7 +2120,7 @@ impl From<payment_methods::CardDetail> for CardDetailsPaymentMethod {
     }
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 impl From<NetworkTokenDetails> for NetworkTokenDetailsPaymentMethod {
     fn from(item: NetworkTokenDetails) -> Self {
         Self {
@@ -2067,14 +2139,14 @@ impl From<NetworkTokenDetails> for NetworkTokenDetailsPaymentMethod {
     }
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct SingleUsePaymentMethodToken {
     pub token: Secret<String>,
     pub merchant_connector_id: id_type::MerchantConnectorAccountId,
 }
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 impl SingleUsePaymentMethodToken {
     pub fn get_single_use_token_from_payment_method_token(
         token: Secret<String>,

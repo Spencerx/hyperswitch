@@ -114,7 +114,7 @@ impl TryFrom<Connector> for PayoutConnectors {
             Connector::Paypal => Ok(Self::Paypal),
             Connector::Stripe => Ok(Self::Stripe),
             Connector::Wise => Ok(Self::Wise),
-            _ => Err(format!("Invalid payout connector {}", value)),
+            _ => Err(format!("Invalid payout connector {value}")),
         }
     }
 }
@@ -175,12 +175,14 @@ pub enum BillingConnectors {
 #[strum(serialize_all = "snake_case")]
 pub enum VaultConnectors {
     Vgs,
+    HyperswitchVault,
 }
 
 impl From<VaultConnectors> for Connector {
     fn from(value: VaultConnectors) -> Self {
         match value {
             VaultConnectors::Vgs => Self::Vgs,
+            VaultConnectors::HyperswitchVault => Self::HyperswitchVault,
         }
     }
 }

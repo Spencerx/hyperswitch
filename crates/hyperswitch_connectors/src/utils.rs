@@ -359,14 +359,13 @@ pub(crate) fn construct_not_implemented_error_report(
     capture_method: enums::CaptureMethod,
     connector_name: &str,
 ) -> error_stack::Report<errors::ConnectorError> {
-    errors::ConnectorError::NotImplemented(format!("{} for {}", capture_method, connector_name))
-        .into()
+    errors::ConnectorError::NotImplemented(format!("{capture_method} for {connector_name}")).into()
 }
 
 pub(crate) const SELECTED_PAYMENT_METHOD: &str = "Selected payment method";
 
 pub(crate) fn get_unimplemented_payment_method_error_message(connector: &str) -> String {
-    format!("{} through {}", SELECTED_PAYMENT_METHOD, connector)
+    format!("{SELECTED_PAYMENT_METHOD} through {connector}")
 }
 
 pub(crate) fn to_connector_meta<T>(connector_meta: Option<Value>) -> Result<T, Error>
@@ -396,8 +395,7 @@ pub(crate) fn validate_currency(
     if request_currency != merchant_config_currency {
         Err(errors::ConnectorError::NotSupported {
             message: format!(
-                "currency {} is not supported for this merchant account",
-                request_currency
+                "currency {request_currency} is not supported for this merchant account",
             ),
             connector: "Braintree",
         })?
@@ -440,7 +438,8 @@ pub(crate) fn is_payment_failure(status: AttemptStatus) -> bool {
         | AttemptStatus::Pending
         | AttemptStatus::PaymentMethodAwaited
         | AttemptStatus::ConfirmationAwaited
-        | AttemptStatus::DeviceDataCollectionPending => false,
+        | AttemptStatus::DeviceDataCollectionPending
+        | AttemptStatus::IntegrityFailure => false,
     }
 }
 
@@ -1125,7 +1124,7 @@ impl CardData for Card {
     fn get_expiry_year_4_digit(&self) -> Secret<String> {
         let mut year = self.card_exp_year.peek().clone();
         if year.len() == 2 {
-            year = format!("20{}", year);
+            year = format!("20{year}");
         }
         Secret::new(year)
     }
@@ -1232,7 +1231,7 @@ impl CardData for CardDetailsForNetworkTransactionId {
     fn get_expiry_year_4_digit(&self) -> Secret<String> {
         let mut year = self.card_exp_year.peek().clone();
         if year.len() == 2 {
-            year = format!("20{}", year);
+            year = format!("20{year}");
         }
         Secret::new(year)
     }
@@ -1363,7 +1362,7 @@ impl AddressDetailsData for AddressDetails {
             .cloned()
             .unwrap_or(Secret::new("".to_string()));
         let last_name = last_name.peek();
-        let full_name = format!("{} {}", first_name, last_name).trim().to_string();
+        let full_name = format!("{first_name} {last_name}").trim().to_string();
         Ok(Secret::new(full_name))
     }
 
@@ -1684,6 +1683,7 @@ pub trait PaymentsAuthorizeRequestData {
     fn get_connector_mandate_id(&self) -> Result<String, Error>;
     fn get_complete_authorize_url(&self) -> Result<String, Error>;
     fn get_ip_address_as_optional(&self) -> Option<Secret<String, IpAddress>>;
+    fn get_optional_user_agent(&self) -> Option<String>;
     fn get_original_amount(&self) -> i64;
     fn get_surcharge_amount(&self) -> Option<i64>;
     fn get_tax_on_surcharge_amount(&self) -> Option<i64>;
@@ -1702,6 +1702,7 @@ pub trait PaymentsAuthorizeRequestData {
         &self,
     ) -> Result<enums::CardNetwork, Error>;
     fn get_connector_testing_data(&self) -> Option<pii::SecretSerdeValue>;
+    fn get_order_id(&self) -> Result<String, errors::ConnectorError>;
 }
 
 impl PaymentsAuthorizeRequestData for PaymentsAuthorizeData {
@@ -1802,6 +1803,11 @@ impl PaymentsAuthorizeRequestData for PaymentsAuthorizeData {
                 .ip_address
                 .map(|ip| Secret::new(ip.to_string()))
         })
+    }
+    fn get_optional_user_agent(&self) -> Option<String> {
+        self.browser_info
+            .clone()
+            .and_then(|browser_info| browser_info.user_agent)
     }
     fn get_original_amount(&self) -> i64 {
         self.surcharge_details
@@ -1924,6 +1930,12 @@ impl PaymentsAuthorizeRequestData for PaymentsAuthorizeData {
     }
     fn get_connector_testing_data(&self) -> Option<pii::SecretSerdeValue> {
         self.connector_testing_data.clone()
+    }
+
+    fn get_order_id(&self) -> Result<String, errors::ConnectorError> {
+        self.order_id
+            .to_owned()
+            .ok_or(errors::ConnectorError::RequestEncodingFailed)
     }
 }
 
@@ -5307,7 +5319,7 @@ pub fn is_mandate_supported(
     } else {
         match payment_method_type {
             Some(pm_type) => Err(errors::ConnectorError::NotSupported {
-                message: format!("{} mandate payment", pm_type),
+                message: format!("{pm_type} mandate payment"),
                 connector,
             }
             .into()),
@@ -5487,6 +5499,8 @@ pub enum PaymentMethodDataType {
     NetworkTransactionIdAndCardDetails,
     DirectCarrierBilling,
     InstantBankTransfer,
+    InstantBankTransferFinland,
+    InstantBankTransferPoland,
     RevolutPay,
 }
 
@@ -5636,6 +5650,12 @@ impl From<PaymentMethodData> for PaymentMethodDataType {
                 }
                 payment_method_data::BankTransferData::InstantBankTransfer {} => {
                     Self::InstantBankTransfer
+                }
+                payment_method_data::BankTransferData::InstantBankTransferFinland {} => {
+                    Self::InstantBankTransferFinland
+                }
+                payment_method_data::BankTransferData::InstantBankTransferPoland {} => {
+                    Self::InstantBankTransferPoland
                 }
             },
             PaymentMethodData::Crypto(_) => Self::Crypto,
@@ -5894,7 +5914,7 @@ impl CardData for api_models::payouts::CardPayout {
     fn get_expiry_year_4_digit(&self) -> Secret<String> {
         let mut year = self.expiry_year.peek().clone();
         if year.len() == 2 {
-            year = format!("20{}", year);
+            year = format!("20{year}");
         }
         Secret::new(year)
     }
@@ -5948,6 +5968,11 @@ pub trait NetworkTokenData {
     fn get_network_token_expiry_month(&self) -> Secret<String>;
     fn get_network_token_expiry_year(&self) -> Secret<String>;
     fn get_cryptogram(&self) -> Option<Secret<String>>;
+    fn get_token_expiry_year_2_digit(&self) -> Result<Secret<String>, errors::ConnectorError>;
+    fn get_token_expiry_month_year_2_digit_with_delimiter(
+        &self,
+        delimiter: String,
+    ) -> Result<Secret<String>, errors::ConnectorError>;
 }
 
 impl NetworkTokenData for payment_method_data::NetworkTokenData {
@@ -5965,7 +5990,7 @@ impl NetworkTokenData for payment_method_data::NetworkTokenData {
     fn get_expiry_year_4_digit(&self) -> Secret<String> {
         let mut year = self.token_exp_year.peek().clone();
         if year.len() == 2 {
-            year = format!("20{}", year);
+            year = format!("20{year}");
         }
         Secret::new(year)
     }
@@ -5974,7 +5999,7 @@ impl NetworkTokenData for payment_method_data::NetworkTokenData {
     fn get_expiry_year_4_digit(&self) -> Secret<String> {
         let mut year = self.network_token_exp_year.peek().clone();
         if year.len() == 2 {
-            year = format!("20{}", year);
+            year = format!("20{year}");
         }
         Secret::new(year)
     }
@@ -6017,6 +6042,56 @@ impl NetworkTokenData for payment_method_data::NetworkTokenData {
     #[cfg(feature = "v2")]
     fn get_cryptogram(&self) -> Option<Secret<String>> {
         self.cryptogram.clone()
+    }
+
+    #[cfg(feature = "v1")]
+    fn get_token_expiry_year_2_digit(&self) -> Result<Secret<String>, errors::ConnectorError> {
+        let binding = self.token_exp_year.clone();
+        let year = binding.peek();
+        Ok(Secret::new(
+            year.get(year.len() - 2..)
+                .ok_or(errors::ConnectorError::RequestEncodingFailed)?
+                .to_string(),
+        ))
+    }
+
+    #[cfg(feature = "v2")]
+    fn get_token_expiry_year_2_digit(&self) -> Result<Secret<String>, errors::ConnectorError> {
+        let binding = self.network_token_exp_year.clone();
+        let year = binding.peek();
+        Ok(Secret::new(
+            year.get(year.len() - 2..)
+                .ok_or(errors::ConnectorError::RequestEncodingFailed)?
+                .to_string(),
+        ))
+    }
+
+    #[cfg(feature = "v1")]
+    fn get_token_expiry_month_year_2_digit_with_delimiter(
+        &self,
+        delimiter: String,
+    ) -> Result<Secret<String>, errors::ConnectorError> {
+        let year = self.get_token_expiry_year_2_digit()?;
+        Ok(Secret::new(format!(
+            "{}{}{}",
+            self.token_exp_month.peek(),
+            delimiter,
+            year.peek()
+        )))
+    }
+
+    #[cfg(feature = "v2")]
+    fn get_token_expiry_month_year_2_digit_with_delimiter(
+        &self,
+        delimiter: String,
+    ) -> Result<Secret<String>, errors::ConnectorError> {
+        let year = self.get_token_expiry_year_2_digit()?;
+        Ok(Secret::new(format!(
+            "{}{}{}",
+            self.network_token_exp_month.peek(),
+            delimiter,
+            year.peek()
+        )))
     }
 }
 
@@ -6076,6 +6151,7 @@ pub(crate) fn convert_setup_mandate_router_data_to_authorize_router_data(
         merchant_account_id: None,
         merchant_config_currency: None,
         connector_testing_data: data.request.connector_testing_data.clone(),
+        order_id: None,
     }
 }
 
@@ -6133,7 +6209,8 @@ pub(crate) fn convert_payment_authorize_router_response<F1, F2, T1, T2>(
         connector_mandate_request_reference_id: data.connector_mandate_request_reference_id.clone(),
         authentication_id: data.authentication_id.clone(),
         psd2_sca_exemption_type: data.psd2_sca_exemption_type,
-        whole_connector_response: data.whole_connector_response.clone(),
+        raw_connector_response: data.raw_connector_response.clone(),
+        is_payment_id_from_merchant: data.is_payment_id_from_merchant,
     }
 }
 
@@ -6172,7 +6249,8 @@ impl FrmTransactionRouterDataRequest for FrmTransactionRouterData {
             AttemptStatus::AuthenticationSuccessful
             | AttemptStatus::PartialChargedAndChargeable
             | AttemptStatus::Authorized
-            | AttemptStatus::Charged => Some(true),
+            | AttemptStatus::Charged
+            | AttemptStatus::IntegrityFailure => Some(true),
 
             AttemptStatus::Started
             | AttemptStatus::AuthenticationPending
@@ -6229,7 +6307,7 @@ where
             .clone()
             .parse_enum("Currency")
             .map(Some)
-            .map_err(|_| serde::de::Error::custom(format!("Invalid currency code: {}", value))),
+            .map_err(|_| serde::de::Error::custom(format!("Invalid currency code: {value}"))),
         _ => Ok(None),
     }
 }
@@ -6439,7 +6517,7 @@ impl XmlSerializer {
         xml_version: &str,
         xml_encoding: Option<&str>,
         xml_standalone: Option<&str>,
-        xml_doc_type: &str,
+        xml_doc_type: Option<&str>,
     ) -> Result<Vec<u8>, error_stack::Report<errors::ConnectorError>> {
         let mut xml_bytes = Vec::new();
         let mut writer = Writer::new(std::io::Cursor::new(&mut xml_bytes));
@@ -6453,10 +6531,12 @@ impl XmlSerializer {
             .change_context(errors::ConnectorError::RequestEncodingFailed)
             .attach_printable("Failed to write XML declaration")?;
 
-        writer
-            .write_event(Event::DocType(BytesText::from_escaped(xml_doc_type)))
-            .change_context(errors::ConnectorError::RequestEncodingFailed)
-            .attach_printable("Failed to write the XML declaration")?;
+        if let Some(xml_doc_type_data) = xml_doc_type {
+            writer
+                .write_event(Event::DocType(BytesText::from_escaped(xml_doc_type_data)))
+                .change_context(errors::ConnectorError::RequestEncodingFailed)
+                .attach_printable("Failed to write the XML declaration")?;
+        };
 
         let xml_body = quick_xml::se::to_string(&item)
             .change_context(errors::ConnectorError::RequestEncodingFailed)

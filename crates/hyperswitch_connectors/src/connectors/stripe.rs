@@ -263,6 +263,23 @@ impl ConnectorIntegration<CreateConnectorCustomer, ConnectorCustomerData, Paymen
                 .to_string()
                 .into(),
         )];
+        if let Some(common_types::payments::SplitPaymentsRequest::StripeSplitPayment(
+            stripe_split_payment,
+        )) = &req.request.split_payments
+        {
+            if stripe_split_payment.charge_type
+                == PaymentChargeType::Stripe(StripeChargeType::Direct)
+            {
+                let mut customer_account_header = vec![(
+                    STRIPE_COMPATIBLE_CONNECT_ACCOUNT.to_string(),
+                    stripe_split_payment
+                        .transfer_account_id
+                        .clone()
+                        .into_masked(),
+                )];
+                header.append(&mut customer_account_header);
+            }
+        }
         let mut api_key = self.get_auth_header(&req.connector_auth_type)?;
         header.append(&mut api_key);
         Ok(header)
@@ -362,7 +379,7 @@ impl ConnectorIntegration<CreateConnectorCustomer, ConnectorCustomerData, Paymen
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -389,6 +406,23 @@ impl ConnectorIntegration<PaymentMethodToken, PaymentMethodTokenizationData, Pay
             CONTENT_TYPE.to_string(),
             TokenizationType::get_content_type(self).to_string().into(),
         )];
+        if let Some(common_types::payments::SplitPaymentsRequest::StripeSplitPayment(
+            stripe_split_payment,
+        )) = &req.request.split_payments
+        {
+            if stripe_split_payment.charge_type
+                == PaymentChargeType::Stripe(StripeChargeType::Direct)
+            {
+                let mut customer_account_header = vec![(
+                    STRIPE_COMPATIBLE_CONNECT_ACCOUNT.to_string(),
+                    stripe_split_payment
+                        .transfer_account_id
+                        .clone()
+                        .into_masked(),
+                )];
+                header.append(&mut customer_account_header);
+            }
+        }
         let mut api_key = self.get_auth_header(&req.connector_auth_type)?;
         header.append(&mut api_key);
         Ok(header)
@@ -400,9 +434,19 @@ impl ConnectorIntegration<PaymentMethodToken, PaymentMethodTokenizationData, Pay
 
     fn get_url(
         &self,
-        _req: &TokenizationRouterData,
+        req: &TokenizationRouterData,
         connectors: &Connectors,
     ) -> CustomResult<String, ConnectorError> {
+        if matches!(
+            req.request.split_payments,
+            Some(common_types::payments::SplitPaymentsRequest::StripeSplitPayment(_))
+        ) {
+            return Ok(format!(
+                "{}{}",
+                self.base_url(connectors),
+                "v1/payment_methods"
+            ));
+        }
         Ok(format!("{}{}", self.base_url(connectors), "v1/tokens"))
     }
 
@@ -486,7 +530,7 @@ impl ConnectorIntegration<PaymentMethodToken, PaymentMethodTokenizationData, Pay
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -526,7 +570,6 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
         connectors: &Connectors,
     ) -> CustomResult<String, ConnectorError> {
         let id = req.request.connector_transaction_id.as_str();
-
         Ok(format!(
             "{}{}/{}/capture",
             self.base_url(connectors),
@@ -634,7 +677,7 @@ impl ConnectorIntegration<Capture, PaymentsCaptureData, PaymentsResponseData> fo
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -801,7 +844,7 @@ impl ConnectorIntegration<PSync, PaymentsSyncData, PaymentsResponseData> for Str
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -827,9 +870,13 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
                 .to_string()
                 .into(),
         )];
+
         let mut api_key = self.get_auth_header(&req.connector_auth_type)?;
         header.append(&mut api_key);
 
+        let stripe_split_payment_metadata = stripe::StripeSplitPaymentRequest::try_from(req)?;
+
+        // if the request has split payment object, then append the transfer account id in headers in charge_type is Direct
         if let Some(common_types::payments::SplitPaymentsRequest::StripeSplitPayment(
             stripe_split_payment,
         )) = &req.request.split_payments
@@ -846,6 +893,16 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
                 )];
                 header.append(&mut customer_account_header);
             }
+        }
+        // if request doesn't have transfer_account_id, but stripe_split_payment_metadata has it, append it
+        else if let Some(transfer_account_id) =
+            stripe_split_payment_metadata.transfer_account_id.clone()
+        {
+            let mut customer_account_header = vec![(
+                STRIPE_COMPATIBLE_CONNECT_ACCOUNT.to_string(),
+                transfer_account_id.into_masked(),
+            )];
+            header.append(&mut customer_account_header);
         }
         Ok(header)
     }
@@ -960,7 +1017,7 @@ impl ConnectorIntegration<Authorize, PaymentsAuthorizeData, PaymentsResponseData
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -1165,7 +1222,7 @@ impl ConnectorIntegration<Void, PaymentsCancelData, PaymentsResponseData> for St
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -1295,7 +1352,7 @@ impl ConnectorIntegration<SetupMandate, SetupMandateRequestData, PaymentsRespons
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -1460,7 +1517,7 @@ impl ConnectorIntegration<Execute, RefundsData, RefundsResponseData> for Stripe 
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -1591,7 +1648,7 @@ impl ConnectorIntegration<RSync, RefundsData, RefundsResponseData> for Stripe {
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -1735,7 +1792,7 @@ impl ConnectorIntegration<Upload, UploadFileRequestData, UploadFileResponse> for
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -1835,7 +1892,7 @@ impl ConnectorIntegration<Retrieve, RetrieveFileRequestData, RetrieveFileRespons
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),
@@ -1960,7 +2017,7 @@ impl ConnectorIntegration<Evidence, SubmitEvidenceRequestData, SubmitEvidenceRes
                     .decline_code
                     .clone()
                     .map(|decline_code| {
-                        format!("message - {}, decline_code - {}", message, decline_code)
+                        format!("message - {message}, decline_code - {decline_code}")
                     })
                     .unwrap_or(message)
             }),

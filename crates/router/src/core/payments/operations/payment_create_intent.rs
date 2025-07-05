@@ -176,6 +176,8 @@ impl<F: Send + Clone + Sync>
             payment_intent,
             client_secret: Some(client_secret.secret),
             sessions_token: vec![],
+            vault_session_details: None,
+            connector_customer_id: None,
         };
 
         let get_trackers_response = operations::GetTrackerResponse { payment_data };
@@ -251,13 +253,7 @@ impl<F: Clone + Send + Sync> Domain<F, PaymentsCreateIntentRequest, payments::Pa
         if let Some(id) = payment_data.payment_intent.customer_id.clone() {
             state
                 .store
-                .find_customer_by_global_id(
-                    &state.into(),
-                    &id,
-                    &payment_data.payment_intent.merchant_id,
-                    merchant_key_store,
-                    storage_scheme,
-                )
+                .find_customer_by_global_id(&state.into(), &id, merchant_key_store, storage_scheme)
                 .await?;
         }
         Ok((Box::new(self), None))

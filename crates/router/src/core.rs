@@ -13,6 +13,7 @@ pub mod conditional_config;
 pub mod configs;
 #[cfg(feature = "olap")]
 pub mod connector_onboarding;
+pub mod connector_validation;
 #[cfg(any(feature = "olap", feature = "oltp"))]
 pub mod currency;
 pub mod customers;
@@ -49,6 +50,7 @@ pub mod refunds_v2;
 pub mod debit_routing;
 pub mod routing;
 pub mod surcharge_decision_config;
+pub mod three_ds_decision_rule;
 #[cfg(feature = "olap")]
 pub mod user;
 #[cfg(feature = "olap")]
@@ -60,9 +62,11 @@ pub mod verification;
 pub mod verify_connector;
 pub mod webhooks;
 
+pub mod profile_acquirer;
 pub mod unified_authentication_service;
+pub mod unified_connector_service;
 
-#[cfg(all(feature = "v2", feature = "payment_methods_v2"))]
+#[cfg(feature = "v2")]
 pub mod proxy;
 pub mod relay;
 #[cfg(feature = "v2")]
